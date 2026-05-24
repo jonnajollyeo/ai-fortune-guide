@@ -14,7 +14,7 @@ from google import genai
 from google.genai import types
 
 from ai.personas import PERSONA_PROMPTS
-from config import GEMINI_API_KEY, MAX_CHAT_TURNS, MODEL_NAME, OHANG_ORDER
+from config import MAX_CHAT_TURNS, MODEL_NAME, OHANG_ORDER
 from saju.calculator import get_pillar_string
 
 # ──────────────────────────────────────────────
@@ -25,12 +25,26 @@ from saju.calculator import get_pillar_string
 _client: genai.Client | None = None
 
 
+def _resolve_api_key() -> str:
+    """런타임에 API 키를 읽는다. 로컬 .env → Streamlit st.secrets 순서로 폴백."""
+    import os
+    key = os.getenv("GEMINI_API_KEY", "")
+    if key:
+        return key
+    try:
+        import streamlit as st
+        return st.secrets.get("GEMINI_API_KEY", "")
+    except Exception:
+        return ""
+
+
 def _get_client() -> genai.Client:
     global _client
     if _client is None:
-        if not GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
-        _client = genai.Client(api_key=GEMINI_API_KEY)
+        api_key = _resolve_api_key()
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다. .env 파일 또는 Streamlit Secrets를 확인하세요.")
+        _client = genai.Client(api_key=api_key)
     return _client
 
 
