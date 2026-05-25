@@ -48,6 +48,17 @@ def _get_client() -> genai.Client:
     return _client
 
 
+def _get_ilgan_info(pillars: dict) -> str:
+    """일주의 천간(일간)과 오행 반환. 예: '庚(금)'"""
+    from saju.calculator import OHANG_MAP
+    ilju = pillars.get("일주")
+    if not ilju:
+        return "미상"
+    tg = ilju["천간"]
+    ohang = OHANG_MAP.get(tg, "")
+    return f"{tg}({ohang})"
+
+
 def _build_user_message(
     pillars: dict,
     ohang_dict: dict[str, int],
@@ -57,10 +68,12 @@ def _build_user_message(
     """첫 상담 요청 유저 메시지 조립."""
     pillar_str = get_pillar_string(pillars)
     ohang_str = " / ".join(f"{o} {ohang_dict.get(o, 0)}" for o in OHANG_ORDER)
+    ilgan = _get_ilgan_info(pillars)
 
     lines = [
         f"사주 원국: {pillar_str}",
-        f"오행 점수: {ohang_str}",
+        f"일간(본인): {ilgan}",
+        f"오행 점수(지장간·일간 가중치 포함): {ohang_str}",
     ]
 
     if celeb_match:
@@ -71,8 +84,8 @@ def _build_user_message(
 
     lines.append(f"상담 테마: {worry_theme}")
     lines.append(
-        "위 사주 데이터를 바탕으로 나의 에너지 특성과 "
-        f"{worry_theme}에 대한 조언을 해주세요."
+        f"일간 {ilgan}을 본인의 핵심 기운으로 삼아, "
+        f"오행 에너지 특성과 {worry_theme}에 대한 조언을 해주세요."
     )
 
     return "\n".join(lines)
@@ -186,13 +199,16 @@ def _build_daily_message(
     ohang_str = " / ".join(f"{o} {ohang_dict.get(o, 0)}" for o in OHANG_ORDER)
     daily_ohang_str = " / ".join(f"{o} {daily_ohang_dict.get(o, 0)}" for o in OHANG_ORDER)
 
+    ilgan = _get_ilgan_info(pillars)
+
     return "\n".join([
         f"사주 원국: {pillar_str}",
+        f"일간(본인): {ilgan}",
         f"원국 오행: {ohang_str}",
         f"오늘 날짜: {today}",
         f"오늘의 연·월·일주: {daily_str}",
         f"오늘의 오행: {daily_ohang_str}",
-        "위 원국과 오늘의 기운 상호작용을 바탕으로 오늘 하루의 운세를 200자 내외로 간결하게 요약해줘.",
+        f"일간 {ilgan}을 본인의 핵심 기운으로 삼아, 원국과 오늘 기운의 상호작용을 200자 내외로 간결하게 요약해줘.",
     ])
 
 
@@ -211,16 +227,21 @@ def _build_compat_message(
     ss = ", ".join(compat_data["sangseang"]) or "없음"
     sg = ", ".join(compat_data["sanggeuk"]) or "없음"
 
+    ilgan_a = _get_ilgan_info(pillars_a)
+    ilgan_b = _get_ilgan_info(pillars_b)
+
     return "\n".join([
         f"사주 A(나): {str_a}",
+        f"A 일간(본인): {ilgan_a}",
         f"오행 A: {ohang_a}",
         f"사주 B(상대): {str_b}",
+        f"B 일간(상대): {ilgan_b}",
         f"오행 B: {ohang_b}",
         f"코사인 유사도: {compat_data['similarity']}%",
         f"상생 관계: {ss}",
         f"상극 관계: {sg}",
         f"종합 궁합 점수: {compat_data['score']}%",
-        "두 사람의 오행 관계를 궁합 해설해줘. 강점(시너지 나는 부분)과 주의점(충돌 가능 부분)을 각각 명시하고 600자 내외로 작성해줘.",
+        f"A의 일간 {ilgan_a}와 B의 일간 {ilgan_b}의 관계를 중심으로 궁합을 해설해줘. 강점(시너지)과 주의점을 각각 명시하고 600자 내외로 작성해줘.",
     ])
 
 

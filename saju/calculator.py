@@ -40,6 +40,23 @@ OHANG_MAP: dict[str, str] = {
     "辰": "토", "戌": "토", "丑": "토", "未": "토",
 }
 
+# 지장간(支藏干): 각 지지에 내포된 천간 목록
+# 명리학에서 지지는 겉으로 드러난 오행 외에 내부에 천간을 품고 있음
+JIJANGGAN: dict[str, list[str]] = {
+    "子": ["壬", "癸"],
+    "丑": ["癸", "辛", "己"],
+    "寅": ["戊", "丙", "甲"],
+    "卯": ["甲", "乙"],
+    "辰": ["乙", "癸", "戊"],
+    "巳": ["戊", "庚", "丙"],
+    "午": ["丙", "己", "丁"],
+    "未": ["丁", "乙", "己"],
+    "申": ["戊", "壬", "庚"],
+    "酉": ["庚", "辛"],
+    "戌": ["辛", "丁", "戊"],
+    "亥": ["甲", "壬"],
+}
+
 # 시간 표시용 레이블 (UI 선택지용)
 HOUR_LABELS: dict[str, int | None] = {
     "모름 (삼주 모드)": None,
@@ -138,31 +155,51 @@ def calc_ohang_vector(
     pillars: dict[str, dict[str, str] | None],
 ) -> tuple[dict[str, int], list[float]]:
     """
-    사주 팔자(또는 삼주) → 오행 카운트 및 정규화 벡터 반환.
+    사주 팔자(또는 삼주) → 오행 점수 및 정규화 벡터 반환.
 
-    Args:
-        pillars: get_saju_pillars() 반환값
+    가중치 기준:
+    - 천간·지지 각 1.0점
+    - 일간(日干, 본인) 추가 +1.0점 (명리학에서 일간이 자아를 대표)
+    - 지장간(支藏干) 각 0.5점 (지지에 내포된 숨은 천간)
 
     Returns:
-        ohang_dict   : {"목": 2, "화": 1, "토": 2, "금": 2, "수": 1}
+        ohang_dict   : {"목": 2, ...} 정수 근사 카운트 (표시용)
         ohang_vector : [목, 화, 토, 금, 수] L1 정규화 리스트 (합 = 1.0)
     """
-    ohang_dict: dict[str, int] = {o: 0 for o in OHANG_ORDER}
+    scores: dict[str, float] = {o: 0.0 for o in OHANG_ORDER}
 
-    for pillar in pillars.values():
+    for key, pillar in pillars.items():
         if pillar is None:
             continue
-        for char in (pillar["천간"], pillar["지지"]):
-            ohang = OHANG_MAP.get(char)
-            if ohang:
-                ohang_dict[ohang] += 1
 
-    total = sum(ohang_dict.values())
+        tg_char = pillar["천간"]
+        dz_char = pillar["지지"]
+
+        # 천간 1.0점
+        if (o := OHANG_MAP.get(tg_char)):
+            scores[o] += 1.0
+        # 일간 추가 1.0점
+        if key == "일주":
+            if (o := OHANG_MAP.get(tg_char)):
+                scores[o] += 1.0
+
+        # 지지 1.0점
+        if (o := OHANG_MAP.get(dz_char)):
+            scores[o] += 1.0
+
+        # 지장간 각 0.5점
+        for hidden in JIJANGGAN.get(dz_char, []):
+            if (o := OHANG_MAP.get(hidden)):
+                scores[o] += 0.5
+
+    total = sum(scores.values())
     if total == 0:
-        # 이론상 발생 불가 — 방어 코드
         ohang_vector = [0.2] * 5
     else:
-        ohang_vector = [round(ohang_dict[o] / total, 10) for o in OHANG_ORDER]
+        ohang_vector = [round(scores[o] / total, 10) for o in OHANG_ORDER]
+
+    # 표시용 정수 dict (반올림)
+    ohang_dict = {o: round(scores[o]) for o in OHANG_ORDER}
 
     return ohang_dict, ohang_vector
 
