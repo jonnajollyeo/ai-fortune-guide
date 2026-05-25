@@ -123,14 +123,23 @@ def get_compatibility(vec_a: list[float], vec_b: list[float]) -> dict:
     sanggeuk_list: list[str] = []
     sangseang_bonus = sanggeuk_penalty = 0.0
 
+    _CN = {"목": "木", "화": "火", "토": "土", "금": "金", "수": "水"}
+    # 받침 유무에 따른 조사 (이/가, 을/를)
+    _SUBJ = {"목": "이", "화": "가", "토": "가", "금": "이", "수": "가"}
+    _OBJ  = {"목": "을", "화": "를", "토": "를", "금": "을", "수": "를"}
+
     for src, tgt in _SANGSEANG.items():
         if va[src] >= THRESHOLD and vb[tgt] < THRESHOLD:
-            sangseang_list.append(f"A의 {src}이(가) B의 {tgt}을(를) 도움")
+            sangseang_list.append(
+                f"나의 {src}({_CN[src]}){_SUBJ[src]} 상대의 {tgt}({_CN[tgt]}){_OBJ[tgt]} 북돋음"
+            )
             sangseang_bonus += va[src]
 
     for src, tgt in _SANGGEUK.items():
         if va[src] >= THRESHOLD and vb[tgt] >= THRESHOLD:
-            sanggeuk_list.append(f"A의 {src}이(가) B의 {tgt}을(를) 억제")
+            sanggeuk_list.append(
+                f"나의 {src}({_CN[src]}){_SUBJ[src]} 상대의 {tgt}({_CN[tgt]}){_OBJ[tgt]} 억제"
+            )
             sanggeuk_penalty += va[src]
 
     score = similarity * 0.5 + min(sangseang_bonus * 30, 30) - min(sanggeuk_penalty * 20, 20)
