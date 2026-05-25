@@ -172,6 +172,117 @@ def continue_chat(
         return _classify_error(exc)
 
 
+def _build_daily_message(
+    pillars: dict,
+    ohang_dict: dict[str, int],
+    daily_pillars: dict,
+    daily_ohang_dict: dict[str, int],
+) -> str:
+    """오늘의 운세 요청 메시지 조립."""
+    from datetime import date as _date
+    today = _date.today().strftime("%Y년 %m월 %d일")
+    pillar_str = get_pillar_string(pillars)
+    daily_str = get_pillar_string(daily_pillars)
+    ohang_str = " / ".join(f"{o} {ohang_dict.get(o, 0)}" for o in OHANG_ORDER)
+    daily_ohang_str = " / ".join(f"{o} {daily_ohang_dict.get(o, 0)}" for o in OHANG_ORDER)
+
+    return "\n".join([
+        f"사주 원국: {pillar_str}",
+        f"원국 오행: {ohang_str}",
+        f"오늘 날짜: {today}",
+        f"오늘의 연·월·일주: {daily_str}",
+        f"오늘의 오행: {daily_ohang_str}",
+        "위 원국과 오늘의 기운 상호작용을 바탕으로 오늘 하루의 운세를 200자 내외로 간결하게 요약해줘.",
+    ])
+
+
+def _build_compat_message(
+    vec_a: list[float],
+    vec_b: list[float],
+    pillars_a: dict,
+    pillars_b: dict,
+    compat_data: dict,
+) -> str:
+    """궁합 해설 요청 메시지 조립."""
+    str_a = get_pillar_string(pillars_a)
+    str_b = get_pillar_string(pillars_b)
+    ohang_a = " / ".join(f"{o} {round(v*100, 1)}%" for o, v in zip(OHANG_ORDER, vec_a))
+    ohang_b = " / ".join(f"{o} {round(v*100, 1)}%" for o, v in zip(OHANG_ORDER, vec_b))
+    ss = ", ".join(compat_data["sangseang"]) or "없음"
+    sg = ", ".join(compat_data["sanggeuk"]) or "없음"
+
+    return "\n".join([
+        f"사주 A(나): {str_a}",
+        f"오행 A: {ohang_a}",
+        f"사주 B(상대): {str_b}",
+        f"오행 B: {ohang_b}",
+        f"코사인 유사도: {compat_data['similarity']}%",
+        f"상생 관계: {ss}",
+        f"상극 관계: {sg}",
+        f"종합 궁합 점수: {compat_data['score']}%",
+        "두 사람의 오행 관계를 궁합 해설해줘. 강점(시너지 나는 부분)과 주의점(충돌 가능 부분)을 각각 명시하고 600자 내외로 작성해줘.",
+    ])
+
+
+def get_daily_fortune(
+    persona_key: str,
+    pillars: dict,
+    ohang_dict: dict[str, int],
+    daily_pillars: dict,
+    daily_ohang_dict: dict[str, int],
+) -> str:
+    """오늘의 운세 일회성 Gemini 요청."""
+    try:
+        client = _get_client()
+        system_prompt = PERSONA_PROMPTS.get(persona_key, PERSONA_PROMPTS["따뜻한_조언가"])
+        user_msg = _build_daily_message(pillars, ohang_dict, daily_pillars, daily_ohang_dict)
+
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=user_msg,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                max_output_tokens=1024,
+                temperature=0.9,
+                thinking_config=types.ThinkingConfig(thinking_budget=256),
+            ),
+        )
+        return response.text
+    except Exception as exc:
+        traceback.print_exc()
+        return _classify_error(exc)
+
+
+def get_compatibility_reading(
+    persona_key: str,
+    vec_a: list[float],
+    vec_b: list[float],
+    pillars_a: dict,
+    pillars_b: dict,
+    compat_data: dict,
+) -> str:
+    """궁합 해설 일회성 Gemini 요청."""
+    try:
+        client = _get_client()
+        system_prompt = PERSONA_PROMPTS.get(persona_key, PERSONA_PROMPTS["따뜻한_조언가"])
+        user_msg = _build_compat_message(vec_a, vec_b, pillars_a, pillars_b, compat_data)
+
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=user_msg,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                max_output_tokens=2048,
+                temperature=0.9,
+                thinking_config=types.ThinkingConfig(thinking_budget=512),
+            ),
+        )
+        return response.text
+    except Exception as exc:
+        traceback.print_exc()
+        return _classify_error(exc)
+
+
 def get_chat_history(chat_session: object) -> list[dict[str, str]]:
     """
     Chat 세션의 대화 히스토리를 [{"role": ..., "content": ...}] 형태로 반환.

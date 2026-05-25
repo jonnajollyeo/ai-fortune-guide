@@ -17,14 +17,25 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from ai.gemini_client import get_saju_reading, continue_chat, get_chat_history
+from datetime import date
+
+from ai.gemini_client import (
+    continue_chat,
+    get_chat_history,
+    get_compatibility_reading,
+    get_daily_fortune,
+    get_saju_reading,
+)
 from ai.personas import PERSONA_DESCRIPTIONS, PERSONA_LABELS
 from config import CELEB_DB_PATH, MAX_CHAT_TURNS, OHANG_ORDER
-from ml.matcher import find_top_matches, get_top1_info, format_similarity_label, load_celeb_db
+from ml.matcher import find_top_matches, format_similarity_label, get_compatibility, get_top1_info, load_celeb_db
 from report.generator import generate_report, get_report_bytes, get_report_filename
 from saju.calculator import (
     HOUR_LABELS,
     calc_ohang_vector,
+    combine_ohang_dicts,
+    get_daily_pillar,
+    get_pillar_string,
     get_saju_pillars,
     validate_birth_input,
 )
@@ -50,6 +61,17 @@ def _init_session():
         "chat_history": [],
         "chat_turn": 0,
         "analyzed": False,
+        "persona_key": "따뜻한_조언가",
+        # 오늘의 운세
+        "daily_fortune": None,
+        "daily_analyzed": False,
+        # 궁합
+        "partner_pillars": None,
+        "partner_ohang_dict": None,
+        "partner_ohang_vector": None,
+        "compat_result": None,
+        "compat_reading": None,
+        "compat_analyzed": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -104,10 +126,16 @@ with st.sidebar:
         if not ok:
             st.error(err_msg)
         else:
-            # 이전 채팅 초기화
+            # 이전 채팅 및 추가 분석 초기화
             st.session_state.chat_history = []
             st.session_state.chat_turn = 0
             st.session_state.analyzed = False
+            st.session_state.daily_fortune = None
+            st.session_state.daily_analyzed = False
+            st.session_state.compat_result = None
+            st.session_state.compat_reading = None
+            st.session_state.compat_analyzed = False
+            st.session_state.persona_key = persona_key
 
             with st.spinner("사주를 분석하는 중..."):
                 try:
@@ -208,8 +236,10 @@ else:
 
     st.divider()
 
-    # ── 탭: AI 해설 / 복채 대화 ───────────────────────────────────
-    tab_reading, tab_chat = st.tabs(["📖 AI 사주 해설", "💬 복채 (추가 질문)"])
+    # ── 탭: AI 해설 / 복채 / 오늘의 운세 / 궁합 ──────────────────
+    tab_reading, tab_chat, tab_daily, tab_compat = st.tabs([
+        "📖 AI 사주 해설", "💬 복채 (추가 질문)", "🌅 오늘의 운세", "💑 궁합 분석"
+    ])
 
     with tab_reading:
         if ai_reading and "⚠️" not in ai_reading:
@@ -261,3 +291,138 @@ else:
                 st.session_state.chat_history.append({"role": "ai", "content": reply})
                 st.session_state.chat_turn += 1
                 st.rerun()
+
+    # ── 오늘의 운세 탭 ────────────────────────────────────────────
+    with tab_daily:
+        st.subheader("🌅 오늘의 운세")
+
+        daily_pillars, daily_ohang_dict, daily_ohang_vector = get_daily_pillar()
+        today_str = date.today().strftime("%Y년 %m월 %d일")
+        daily_pillar_str = get_pillar_string(daily_pillars)
+        st.caption(f"오늘 날짜: {today_str} · 오늘의 연·월·일주: {daily_pillar_str}")
+
+        _, combined_vector = combine_ohang_dicts(ohang_dict, daily_ohang_dict)
+
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            fig_daily = draw_radar_chart(
+                ohang_vector, "나의 원국",
+                combined_vector, "원국 + 오늘 기운"
+            )
+            st.plotly_chart(fig_daily, width="stretch")
+        with col_d2:
+            st.markdown(f"**오늘의 오행**")
+            fig_daily_bar = draw_ohang_bar(daily_ohang_dict)
+            st.plotly_chart(fig_daily_bar, width="stretch")
+
+        if not st.session_state.daily_analyzed:
+            if st.button("🌅 오늘의 운세 보기", use_container_width=True, type="primary"):
+                with st.spinner("오늘의 운세를 분석하는 중..."):
+                    fortune = get_daily_fortune(
+                        st.session_state.persona_key,
+                        pillars,
+                        ohang_dict,
+                        daily_pillars,
+                        daily_ohang_dict,
+                    )
+                st.session_state.daily_fortune = fortune
+                st.session_state.daily_analyzed = True
+                st.rerun()
+
+        if st.session_state.daily_analyzed:
+            fortune = st.session_state.daily_fortune
+            if fortune and "⚠️" not in fortune:
+                st.markdown(fortune)
+            else:
+                st.warning(fortune or "운세를 불러오지 못했습니다.")
+
+    # ── 궁합 분석 탭 ──────────────────────────────────────────────
+    with tab_compat:
+        st.subheader("💑 사주 궁합 분석")
+
+        with st.form("compat_form"):
+            st.markdown("**상대방 생년월일시 입력**")
+            p_col1, p_col2, p_col3 = st.columns(3)
+            with p_col1:
+                p_year = st.number_input("연도", min_value=1900, max_value=2025, value=1995, step=1)
+            with p_col2:
+                p_month = st.selectbox("월", range(1, 13), index=0)
+            with p_col3:
+                p_day = st.number_input("일", min_value=1, max_value=31, value=1, step=1)
+            p_hour_label = st.selectbox(
+                "태어난 시간",
+                list(HOUR_LABELS.keys()),
+                index=0,
+                help="생시를 모르면 '모름(삼주 모드)'를 선택하세요.",
+            )
+            p_hour = HOUR_LABELS[p_hour_label]
+            compat_submitted = st.form_submit_button(
+                "💑 궁합 분석 시작", use_container_width=True, type="primary"
+            )
+
+        if compat_submitted:
+            ok, err = validate_birth_input(int(p_year), int(p_month), int(p_day), p_hour)
+            if not ok:
+                st.error(err)
+            else:
+                with st.spinner("궁합을 분석하는 중..."):
+                    partner_pillars = get_saju_pillars(int(p_year), int(p_month), int(p_day), p_hour)
+                    partner_ohang_dict, partner_ohang_vector = calc_ohang_vector(partner_pillars)
+
+                    compat_result = get_compatibility(ohang_vector, partner_ohang_vector)
+                    compat_reading = get_compatibility_reading(
+                        st.session_state.persona_key,
+                        ohang_vector,
+                        partner_ohang_vector,
+                        pillars,
+                        partner_pillars,
+                        compat_result,
+                    )
+
+                st.session_state.partner_pillars = partner_pillars
+                st.session_state.partner_ohang_dict = partner_ohang_dict
+                st.session_state.partner_ohang_vector = partner_ohang_vector
+                st.session_state.compat_result = compat_result
+                st.session_state.compat_reading = compat_reading
+                st.session_state.compat_analyzed = True
+                st.rerun()
+
+        if st.session_state.compat_analyzed:
+            compat_result = st.session_state.compat_result
+            partner_ohang_vector = st.session_state.partner_ohang_vector
+
+            # 점수 요약
+            score = compat_result["score"]
+            grade = "최상" if score >= 80 else "상" if score >= 65 else "중" if score >= 50 else "하"
+            c1, c2, c3 = st.columns(3)
+            c1.metric("종합 궁합 점수", f"{score}%")
+            c2.metric("오행 유사도", f"{compat_result['similarity']}%")
+            c3.metric("궁합 등급", grade)
+
+            # 레이더 차트 비교
+            col_c1, col_c2 = st.columns(2)
+            with col_c1:
+                fig_compat = draw_radar_chart(
+                    ohang_vector, "나의 에너지",
+                    partner_ohang_vector, "상대 에너지"
+                )
+                st.plotly_chart(fig_compat, width="stretch")
+
+            with col_c2:
+                if compat_result["sangseang"]:
+                    st.markdown("**상생 (시너지)**")
+                    for s in compat_result["sangseang"]:
+                        st.success(s)
+                if compat_result["sanggeuk"]:
+                    st.markdown("**상극 (주의)**")
+                    for s in compat_result["sanggeuk"]:
+                        st.warning(s)
+                if not compat_result["sangseang"] and not compat_result["sanggeuk"]:
+                    st.info("뚜렷한 상생·상극 패턴 없음")
+
+            st.divider()
+            compat_reading = st.session_state.compat_reading
+            if compat_reading and "⚠️" not in compat_reading:
+                st.markdown(compat_reading)
+            else:
+                st.warning(compat_reading or "궁합 해설을 불러오지 못했습니다.")

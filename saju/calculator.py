@@ -175,3 +175,22 @@ def get_pillar_string(pillars: dict[str, dict[str, str] | None]) -> str:
         if p:
             parts.append(p["천간"] + p["지지"])
     return " ".join(parts)
+
+
+def get_daily_pillar(today: date | None = None) -> tuple[dict, dict[str, int], list[float]]:
+    """오늘의 연·월·일주(삼주) 및 오행 벡터 반환. today=None이면 date.today() 사용."""
+    if today is None:
+        today = date.today()
+    pillars = get_saju_pillars(today.year, today.month, today.day, None)
+    ohang_dict, ohang_vector = calc_ohang_vector(pillars)
+    return pillars, ohang_dict, ohang_vector
+
+
+def combine_ohang_dicts(
+    dict_a: dict[str, int], dict_b: dict[str, int]
+) -> tuple[dict[str, int], list[float]]:
+    """두 오행 딕셔너리를 합산하여 새 dict와 정규화 벡터 반환."""
+    combined = {o: dict_a.get(o, 0) + dict_b.get(o, 0) for o in OHANG_ORDER}
+    total = sum(combined.values())
+    vector = [round(combined[o] / total, 10) if total > 0 else 0.2 for o in OHANG_ORDER]
+    return combined, vector

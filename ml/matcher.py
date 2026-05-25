@@ -96,3 +96,49 @@ def format_similarity_label(score: float) -> str:
     if score >= 60:
         return "약간 유사한 에너지"
     return "다른 에너지"
+
+
+# 상생·상극 관계 테이블 (목→화→토→금→수→목)
+_SANGSEANG: dict[str, str] = {"목": "화", "화": "토", "토": "금", "금": "수", "수": "목"}
+_SANGGEUK:  dict[str, str] = {"목": "토", "토": "수", "수": "화", "화": "금", "금": "목"}
+
+
+def get_compatibility(vec_a: list[float], vec_b: list[float]) -> dict:
+    """
+    두 오행 벡터 간 궁합 점수 및 상생·상극 패턴 분석.
+
+    Returns:
+        score      : 종합 궁합 점수 (0~100)
+        similarity : 코사인 유사도 (%)
+        sangseang  : 상생 관계 설명 리스트
+        sanggeuk   : 상극 관계 설명 리스트
+    """
+    similarity = float(cosine_similarity([vec_a], [vec_b])[0][0]) * 100
+
+    va = dict(zip(OHANG_ORDER, vec_a))
+    vb = dict(zip(OHANG_ORDER, vec_b))
+
+    THRESHOLD = 0.25
+    sangseang_list: list[str] = []
+    sanggeuk_list: list[str] = []
+    sangseang_bonus = sanggeuk_penalty = 0.0
+
+    for src, tgt in _SANGSEANG.items():
+        if va[src] >= THRESHOLD and vb[tgt] < THRESHOLD:
+            sangseang_list.append(f"A의 {src}이(가) B의 {tgt}을(를) 도움")
+            sangseang_bonus += va[src]
+
+    for src, tgt in _SANGGEUK.items():
+        if va[src] >= THRESHOLD and vb[tgt] >= THRESHOLD:
+            sanggeuk_list.append(f"A의 {src}이(가) B의 {tgt}을(를) 억제")
+            sanggeuk_penalty += va[src]
+
+    score = similarity * 0.5 + min(sangseang_bonus * 30, 30) - min(sanggeuk_penalty * 20, 20)
+    score = max(0.0, min(100.0, score))
+
+    return {
+        "score": round(score, 1),
+        "similarity": round(similarity, 1),
+        "sangseang": sangseang_list,
+        "sanggeuk": sanggeuk_list,
+    }
