@@ -8,10 +8,10 @@ import plotly.graph_objects as go
 
 from config import OHANG_ORDER
 
-# 레이더 차트 축 레이블 (마지막에 첫 값 반복 → 도형 닫기)
+# 레이더 차트는 마지막 값이 첫 값과 같아야 도형이 닫힘 → 목(木)을 처음과 끝에 배치
 _THETA = ["목(木)", "화(火)", "토(土)", "금(金)", "수(水)", "목(木)"]
 
-# 오행별 색상 (bar chart용)
+# 오행별 고유 색상: 전통 오행 색 배정에서 유래 (목=청록, 화=적, 토=황, 금=백/회, 수=흑/청)
 OHANG_COLORS = {
     "목": "#4CAF50",  # 초록
     "화": "#F44336",  # 빨강
@@ -39,13 +39,14 @@ def draw_radar_chart(
     Returns:
         Plotly Figure 객체 — st.plotly_chart()에 직접 전달 가능
     """
+    # 두 벡터 중 최댓값 기준으로 축 범위 설정: 어느 쪽도 잘리지 않게 여유 35% 확보
     all_values = user_vector + (celeb_vector or [])
     r_max = max(all_values) * 1.35 if all_values else 0.5
 
     fig = go.Figure()
 
-    # 사용자 트레이스
-    user_r = user_vector + [user_vector[0]]
+    # 사용자 트레이스: 파란 반투명 채움
+    user_r = user_vector + [user_vector[0]]  # 도형 닫기 위해 첫 값 반복
     fig.add_trace(go.Scatterpolar(
         r=user_r,
         theta=_THETA,
@@ -56,7 +57,7 @@ def draw_radar_chart(
         hovertemplate="%{theta}: %{r:.3f}<extra></extra>",
     ))
 
-    # 연예인 비교 트레이스 (있을 때)
+    # 연예인 비교 트레이스: 빨간 점선으로 구분 (있을 때만 추가)
     if celeb_vector is not None:
         celeb_r = celeb_vector + [celeb_vector[0]]
         fig.add_trace(go.Scatterpolar(
@@ -85,7 +86,7 @@ def draw_radar_chart(
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=-0.2,
+            y=-0.2,   # 차트 아래 범례 배치 (차트 내부 겹침 방지)
             xanchor="center",
             x=0.5,
         ),
@@ -102,6 +103,7 @@ def draw_ohang_bar(ohang_dict: dict[str, int]) -> go.Figure:
     Args:
         ohang_dict: {"목": 2, "화": 1, "토": 2, "금": 2, "수": 1}
     """
+    # 한글 + 한자를 같이 표시: "목(木)" 형태로 가독성 향상
     labels = [f"{o}({['木','火','土','金','水'][i]})" for i, o in enumerate(OHANG_ORDER)]
     values = [ohang_dict.get(o, 0) for o in OHANG_ORDER]
     colors = [OHANG_COLORS[o] for o in OHANG_ORDER]
@@ -111,7 +113,7 @@ def draw_ohang_bar(ohang_dict: dict[str, int]) -> go.Figure:
         y=values,
         marker_color=colors,
         text=values,
-        textposition="outside",
+        textposition="outside",  # 막대 위에 숫자 표시
         hovertemplate="%{x}: %{y}개<extra></extra>",
     ))
     fig.update_layout(

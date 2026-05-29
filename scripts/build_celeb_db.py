@@ -55,7 +55,7 @@ def load_kaggle_idols() -> pd.DataFrame:
     print(f"[kaggle] {KAGGLE_CSV} 로드 중...")
     df = pd.read_csv(KAGGLE_CSV, encoding="utf-8-sig")
 
-    # 필요 컬럼 추출 및 이름 통일
+    # Kaggle CSV 컬럼명 → 내부 통일 컬럼명 매핑
     col_map = {
         "Stage Name": "name_en",       # 영문 스테이지명 (폴백용)
         "K Stage Name": "name_kr",     # 한글 스테이지명 (우선 사용)
@@ -63,7 +63,7 @@ def load_kaggle_idols() -> pd.DataFrame:
         "Date of Birth": "birthdate",
         "Group": "group",
     }
-    # 실제 컬럼명이 조금 다를 수 있으므로 대소문자 무관 매핑
+    # 실제 컬럼명 앞뒤 공백 제거 후 소문자로 정규화해 대소문자 차이 무시
     df.columns = df.columns.str.strip()
     available = {c.lower(): c for c in df.columns}
     rename = {}
@@ -73,24 +73,23 @@ def load_kaggle_idols() -> pd.DataFrame:
             rename[available[key]] = target
     df = df.rename(columns=rename)
 
-    # 필수 컬럼 없으면 종료
     if "birthdate" not in df.columns:
         print("[kaggle] 'Date of Birth' 컬럼을 찾지 못했습니다. CSV 구조를 확인하세요.")
         return pd.DataFrame()
 
-    # name: 한글 스테이지명 우선 → 영문 스테이지명 → Full Name 순 폴백
+    # 이름 우선순위: 한글 스테이지명 > 영문 스테이지명 > Full Name
+    # 한글 이름이 있으면 한글 사용, 없으면 영문 폴백 (연예인 인지도 기준)
     name_kr = df.get("name_kr", pd.Series(dtype=str)).str.strip().replace("", pd.NA)
     name_en = df.get("name_en", pd.Series(dtype=str)).str.strip().replace("", pd.NA)
     full    = df.get("full_name", pd.Series(dtype=str)).str.strip().replace("", pd.NA)
     df["name"] = name_kr.fillna(name_en).fillna(full).fillna("Unknown")
 
-    # group 보완
     if "group" in df.columns:
         df["group"] = df["group"].fillna("솔로")
     else:
         df["group"] = "아이돌"
 
-    # 날짜 파싱 — Kaggle CSV는 DD/MM/YYYY 포맷
+    # Kaggle CSV 날짜 포맷은 DD/MM/YYYY이므로 dayfirst=True 필수
     df["birthdate"] = pd.to_datetime(df["birthdate"], dayfirst=True, errors="coerce")
     before = len(df)
     df = df.dropna(subset=["birthdate"])
@@ -112,10 +111,12 @@ def load_kaggle_idols() -> pd.DataFrame:
 def compute_ohang_vector(birthdate_str: str) -> list[float] | None:
     """
     'YYYY-MM-DD' 문자열 → 삼주 오행 벡터 [목, 화, 토, 금, 수].
+    연예인 DB는 생시 정보가 없으므로 삼주(三柱) 기준으로 통일.
     계산 실패 시 None 반환.
     """
     try:
         dt = datetime.strptime(birthdate_str, "%Y-%m-%d")
+        # hour=None: 삼주 모드 — 시주 없이 연·월·일주만 사용
         pillars = get_saju_pillars(dt.year, dt.month, dt.day, hour=None)
         _, vec = calc_ohang_vector(pillars)
         return vec
@@ -134,10 +135,10 @@ def build():
 
     # 1. 소스 수집
     df_kaggle = load_kaggle_idols()
-    df_rapper = get_rapper_df(use_web=False)
+    df_rapper = get_rapper_df(use_web=False)  # use_web=False: 오프라인 수동 데이터만 사용
     df_rapper["source"] = df_rapper.get("source", pd.Series("manual", index=df_rapper.index))
 
-    # 2. 병합
+    # 2. 소스 병합 (빈 DataFrame은 제외)
     frames = [f for f in [df_kaggle, df_rapper] if not f.empty]
     if not frames:
         print("[error] 데이터 소스가 없습니다.")
@@ -150,20 +151,22 @@ def build():
     df_all["name"] = df_all["name"].str.strip()
     df_all["birthdate"] = df_all["birthdate"].str.strip()
 
-    # 4. 중복 제거 (name + birthdate 기준)
+    # 4. 중복 제거: 같은 이름·생년월일 조합이 두 소스에 모두 있을 수 있음
     df_all = df_all.drop_duplicates(subset=["name", "birthdate"]).reset_index(drop=True)
     print(f"[merge] 중복 제거 후 {len(df_all)}행")
 
     # 5. 오행 벡터 일괄 계산 (삼주 기준)
+    # 연예인은 생시 불명이므로 연·월·일 삼주만으로 벡터 생성 (사용자와 동일 기준 비교 위함)
     print("\n[vector] 오행 벡터 산출 중...")
     vectors: list[str | None] = []
     for birthdate in tqdm(df_all["birthdate"], ncols=70):
         vec = compute_ohang_vector(birthdate)
+        # JSON 문자열로 직렬화해 CSV 한 셀에 저장
         vectors.append(json.dumps(vec) if vec is not None else None)
 
     df_all["ohang_vector"] = vectors
 
-    # 계산 실패 행 제거
+    # 계산 실패 행 제거 (1900년 이전 출생 등 sxtwl 미지원 날짜)
     before = len(df_all)
     df_all = df_all.dropna(subset=["ohang_vector"]).reset_index(drop=True)
     failed = before - len(df_all)
@@ -184,7 +187,7 @@ def build():
 
 
 def _integrity_check(df: pd.DataFrame):
-    """ohang_vector 합산이 1.0인지 샘플 검사."""
+    """ohang_vector 합산이 1.0인지 샘플 검사. L1 정규화 깨짐 감지용."""
     print("\n[check] 무결성 검사 중...")
     sample = df.sample(min(5, len(df)), random_state=42)
     all_ok = True

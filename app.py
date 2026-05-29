@@ -5,7 +5,7 @@ AI 운명 가이드 — Streamlit 진입점.
 
 import streamlit as st
 
-# ── 페이지 설정 (반드시 첫 번째 st 호출) ─────────────────────────
+# set_page_config는 반드시 최초 st 호출이어야 함 — import 직후 바로 실행
 st.set_page_config(
     page_title="AI 운명 가이드",
     page_icon="🔮",
@@ -15,6 +15,8 @@ st.set_page_config(
 
 import sys
 from pathlib import Path
+# Streamlit Cloud에서 ai_fortune_guide/ 가 작업 디렉토리가 되지 않을 수 있으므로
+# __file__ 기준으로 프로젝트 루트를 명시적으로 sys.path에 추가
 sys.path.insert(0, str(Path(__file__).parent))
 
 from datetime import date
@@ -45,11 +47,14 @@ from saju.visualizer import draw_ohang_bar, draw_radar_chart, format_ohang_summa
 # ── DB 캐시 로드 ──────────────────────────────────────────────────
 @st.cache_data
 def _load_db():
+    # @st.cache_data: 앱 세션 간 DB를 재로드하지 않아 초기 응답 속도 개선
+    # DB는 변경되지 않으므로 앱 전체 생애주기 동안 1회만 로드해도 무방
     return load_celeb_db(CELEB_DB_PATH)
 
 
 # ── 세션 상태 초기화 ──────────────────────────────────────────────
 def _init_session():
+    # 키가 이미 존재하면 덮어쓰지 않음 (페이지 리렌더 시 상태 보존)
     defaults = {
         "pillars": None,
         "ohang_dict": None,
@@ -62,10 +67,10 @@ def _init_session():
         "chat_turn": 0,
         "analyzed": False,
         "persona_key": "따뜻한_조언가",
-        # 오늘의 운세
+        # 오늘의 운세: 탭 전환 시 중복 API 호출 방지용 플래그
         "daily_fortune": None,
         "daily_analyzed": False,
-        # 궁합
+        # 궁합: 상대 정보와 분석 결과 보존
         "partner_pillars": None,
         "partner_ohang_dict": None,
         "partner_ohang_vector": None,
@@ -126,7 +131,7 @@ with st.sidebar:
         if not ok:
             st.error(err_msg)
         else:
-            # 이전 채팅 및 추가 분석 초기화
+            # 새 분석 시작 시 이전 결과 전체 초기화 (탭 간 오래된 데이터 혼재 방지)
             st.session_state.chat_history = []
             st.session_state.chat_turn = 0
             st.session_state.analyzed = False
@@ -135,7 +140,7 @@ with st.sidebar:
             st.session_state.compat_result = None
             st.session_state.compat_reading = None
             st.session_state.compat_analyzed = False
-            st.session_state.persona_key = persona_key
+            st.session_state.persona_key = persona_key  # 후속 탭에서 같은 페르소나 재사용
 
             with st.spinner("사주를 분석하는 중..."):
                 try:
@@ -144,7 +149,8 @@ with st.sidebar:
                     pillars = get_saju_pillars(int(year), int(month), int(day), hour)
                     ohang_dict, ohang_vector = calc_ohang_vector(pillars)
 
-                    # 연예인 매칭은 삼주 벡터로 (공정 비교)
+                    # 연예인 매칭은 삼주 벡터로 수행: 시주를 모르는 연예인도 포함되어 있어
+                    # 팔자 벡터로 비교하면 불공정한 유사도가 나올 수 있음
                     pillars_3 = get_saju_pillars(int(year), int(month), int(day), None)
                     _, ohang_vector_3 = calc_ohang_vector(pillars_3)
                     matches = find_top_matches(ohang_vector_3, df_celeb, matrix)
@@ -164,7 +170,7 @@ with st.sidebar:
                         "chat_session": chat_session,
                         "analyzed": True,
                     })
-                    # 첫 AI 응답을 히스토리에 추가
+                    # 첫 AI 응답을 히스토리 시작점으로 추가 (채팅 탭에서 맥락 표시용)
                     st.session_state.chat_history = [{"role": "ai", "content": ai_text}]
 
                 except Exception as e:
@@ -184,6 +190,7 @@ if not st.session_state.analyzed:
     - 📄 **리포트 다운로드** — 결과를 마크다운 파일로 저장
     """)
 else:
+    # 세션 상태에서 분석 결과 꺼내기
     pillars = st.session_state.pillars
     ohang_dict = st.session_state.ohang_dict
     ohang_vector = st.session_state.ohang_vector
@@ -198,7 +205,7 @@ else:
         st.subheader("오행 에너지 차트")
         celeb_vec = top1["ohang_vector"] if top1 else None
         celeb_name = top1["name"] if top1 else None
-        # 연예인 비교는 삼주 기준 — 표시용 레이블에 명시
+        # 연예인 벡터는 삼주 기준으로 저장됨 — 비교 시 스케일 일치
         fig_radar = draw_radar_chart(ohang_vector, "나의 에너지", celeb_vec, celeb_name)
         st.plotly_chart(fig_radar, width="stretch")
 
@@ -242,12 +249,13 @@ else:
     ])
 
     with tab_reading:
+        # ⚠️ 포함 여부로 AI 오류 응답 구분
         if ai_reading and "⚠️" not in ai_reading:
             st.markdown(ai_reading)
         else:
             st.warning(ai_reading or "AI 해설을 불러오지 못했습니다.")
 
-        # 리포트 다운로드
+        # 리포트 다운로드 (오류 응답일 때는 표시하지 않음)
         if ai_reading and "⚠️" not in ai_reading:
             st.divider()
             report_str = generate_report(
@@ -261,13 +269,13 @@ else:
             )
 
     with tab_chat:
-        # 채팅 히스토리 표시
+        # 채팅 히스토리 표시 (첫 AI 응답 포함)
         for msg in st.session_state.chat_history:
             role = "assistant" if msg["role"] == "ai" else "user"
             with st.chat_message(role):
                 st.markdown(msg["content"])
 
-        # 입력창
+        # 남은 횟수 계산 및 입력창 표시
         remaining = MAX_CHAT_TURNS - st.session_state.chat_turn
         if st.session_state.chat_session is None:
             st.warning("AI 세션이 없습니다. 분석을 다시 실행해주세요.")
@@ -278,7 +286,7 @@ else:
                 f"궁금한 점을 더 물어보세요... (남은 횟수: {remaining}회)"
             )
             if user_input:
-                # 사용자 메시지 즉시 표시
+                # 사용자 메시지를 히스토리에 먼저 추가 (UX: 입력 즉시 화면에 표시)
                 st.session_state.chat_history.append({"role": "user", "content": user_input})
 
                 with st.spinner("답변 중..."):
@@ -290,17 +298,20 @@ else:
 
                 st.session_state.chat_history.append({"role": "ai", "content": reply})
                 st.session_state.chat_turn += 1
+                # rerun: 새 메시지를 즉시 화면에 반영
                 st.rerun()
 
     # ── 오늘의 운세 탭 ────────────────────────────────────────────
     with tab_daily:
         st.subheader("🌅 오늘의 운세")
 
+        # 오늘의 연·월·일주 계산 (탭 진입마다 실행 — 자정 기준 날짜 갱신 반영)
         daily_pillars, daily_ohang_dict, daily_ohang_vector = get_daily_pillar()
         today_str = date.today().strftime("%Y년 %m월 %d일")
         daily_pillar_str = get_pillar_string(daily_pillars)
         st.caption(f"오늘 날짜: {today_str} · 오늘의 연·월·일주: {daily_pillar_str}")
 
+        # 원국 + 오늘 기운 합산 벡터: 레이더 차트로 시각적 상호작용 표시
         _, combined_vector = combine_ohang_dicts(ohang_dict, daily_ohang_dict)
 
         col_d1, col_d2 = st.columns(2)
@@ -315,6 +326,7 @@ else:
             fig_daily_bar = draw_ohang_bar(daily_ohang_dict)
             st.plotly_chart(fig_daily_bar, width="stretch")
 
+        # daily_analyzed 플래그로 버튼을 누른 후 재렌더 시 중복 API 호출 방지
         if not st.session_state.daily_analyzed:
             if st.button("🌅 오늘의 운세 보기", use_container_width=True, type="primary"):
                 with st.spinner("오늘의 운세를 분석하는 중..."):
@@ -369,6 +381,7 @@ else:
                     partner_pillars = get_saju_pillars(int(p_year), int(p_month), int(p_day), p_hour)
                     partner_ohang_dict, partner_ohang_vector = calc_ohang_vector(partner_pillars)
 
+                    # 수치 계산 → Gemini 해설 순서: 점수를 먼저 구해야 프롬프트에 포함 가능
                     compat_result = get_compatibility(ohang_vector, partner_ohang_vector)
                     compat_reading = get_compatibility_reading(
                         st.session_state.persona_key,
@@ -391,7 +404,7 @@ else:
             compat_result = st.session_state.compat_result
             partner_ohang_vector = st.session_state.partner_ohang_vector
 
-            # 점수 요약
+            # 점수 등급 기준: 80+최상, 65+상, 50+중, 미만하
             score = compat_result["score"]
             grade = "최상" if score >= 80 else "상" if score >= 65 else "중" if score >= 50 else "하"
             c1, c2, c3 = st.columns(3)
@@ -399,7 +412,7 @@ else:
             c2.metric("오행 유사도", f"{compat_result['similarity']}%")
             c3.metric("궁합 등급", grade)
 
-            # 레이더 차트 비교
+            # 레이더 차트로 두 사람의 오행 분포 겹쳐 시각화
             col_c1, col_c2 = st.columns(2)
             with col_c1:
                 fig_compat = draw_radar_chart(

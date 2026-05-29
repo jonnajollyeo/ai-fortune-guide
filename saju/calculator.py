@@ -21,18 +21,20 @@ from config import OHANG_ORDER
 # 상수 테이블
 # ──────────────────────────────────────────────
 
+# sxtwl은 천간/지지를 인덱스(0~9, 0~11)로 반환 → 이 리스트로 한자 변환
 CHEONGAN: list[str] = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 JIJI: list[str] = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
 
 # 천간·지지 → 오행 매핑
+# 토(土)는 진·술·축·미 4개의 지지에 대응 — 사계절 환절기를 상징하는 명리학 특성
 OHANG_MAP: dict[str, str] = {
-    # 천간
+    # 천간 (10개)
     "甲": "목", "乙": "목",
     "丙": "화", "丁": "화",
     "戊": "토", "己": "토",
     "庚": "금", "辛": "금",
     "壬": "수", "癸": "수",
-    # 지지
+    # 지지 (12개)
     "子": "수", "亥": "수",
     "寅": "목", "卯": "목",
     "巳": "화", "午": "화",
@@ -41,7 +43,8 @@ OHANG_MAP: dict[str, str] = {
 }
 
 # 지장간(支藏干): 각 지지에 내포된 천간 목록
-# 명리학에서 지지는 겉으로 드러난 오행 외에 내부에 천간을 품고 있음
+# 지지는 겉으로 드러난 오행 외에 내부에 천간을 품고 있음 (숨은 에너지)
+# 이를 반영하면 단순 지지 오행만 쓰는 것보다 정확도가 높아짐
 JIJANGGAN: dict[str, list[str]] = {
     "子": ["壬", "癸"],
     "丑": ["癸", "辛", "己"],
@@ -57,7 +60,8 @@ JIJANGGAN: dict[str, list[str]] = {
     "亥": ["甲", "壬"],
 }
 
-# 시간 표시용 레이블 (UI 선택지용)
+# UI 선택지용 레이블: 문자열 키 → 24시간제 정수 or None(삼주 모드)
+# None이면 시주를 계산하지 않는 "삼주(三柱)" 모드로 동작
 HOUR_LABELS: dict[str, int | None] = {
     "모름 (삼주 모드)": None,
     "자시 (23:00~01:00)": 23,
@@ -80,6 +84,7 @@ HOUR_LABELS: dict[str, int | None] = {
 # ──────────────────────────────────────────────
 
 def _gz_to_dict(tg_idx: int, dz_idx: int) -> dict[str, str]:
+    # sxtwl 인덱스를 한자 문자로 변환하는 얇은 래퍼
     return {"천간": CHEONGAN[tg_idx], "지지": JIJI[dz_idx]}
 
 
@@ -131,20 +136,25 @@ def get_saju_pillars(
             "시주": {"천간": "辛", "지지": "巳"},  # hour=None이면 None
         }
     """
+    # sxtwl.fromSolar(): 양력 날짜를 만세력 날짜 객체로 변환
     day_obj = sxtwl.fromSolar(year, month, day)
 
+    # 연주: 입춘 기준 (sxtwl이 자동 처리)
     year_gz = day_obj.getYearGZ()
+    # 월주: 절기(입춘·경칩 등) 기준 (sxtwl이 자동 처리)
     month_gz = day_obj.getMonthGZ()
+    # 일주: 60갑자 순환 기준
     day_gz = day_obj.getDayGZ()
 
     pillars: dict[str, dict[str, str] | None] = {
         "년주": _gz_to_dict(year_gz.tg, year_gz.dz),
         "월주": _gz_to_dict(month_gz.tg, month_gz.dz),
         "일주": _gz_to_dict(day_gz.tg, day_gz.dz),
-        "시주": None,
+        "시주": None,  # 생시를 입력하지 않으면 None (삼주 모드)
     }
 
     if hour is not None:
+        # getHourGZ는 24시간 정수 그대로 전달 (야자시 23 포함)
         hour_gz = day_obj.getHourGZ(hour)
         pillars["시주"] = _gz_to_dict(hour_gz.tg, hour_gz.dz)
 
@@ -175,30 +185,34 @@ def calc_ohang_vector(
         tg_char = pillar["천간"]
         dz_char = pillar["지지"]
 
-        # 천간 1.0점
+        # 천간: 1.0점
         if (o := OHANG_MAP.get(tg_char)):
             scores[o] += 1.0
-        # 일간 추가 1.0점
+
+        # 일간(일주의 천간)에 추가 1.0점 부여
+        # 명리학에서 일간은 '자아(自我)'를 나타내므로 에너지 영향이 가장 큼
         if key == "일주":
             if (o := OHANG_MAP.get(tg_char)):
                 scores[o] += 1.0
 
-        # 지지 1.0점
+        # 지지: 1.0점
         if (o := OHANG_MAP.get(dz_char)):
             scores[o] += 1.0
 
-        # 지장간 각 0.5점
+        # 지장간: 각 0.5점 (겉으로 드러나지 않는 숨은 에너지이므로 절반 가중)
         for hidden in JIJANGGAN.get(dz_char, []):
             if (o := OHANG_MAP.get(hidden)):
                 scores[o] += 0.5
 
     total = sum(scores.values())
+    # total이 0인 경우(사주 데이터 없음)는 균등 분포로 처리
     if total == 0:
         ohang_vector = [0.2] * 5
     else:
+        # L1 정규화: 합이 1.0이 되도록 — 코사인 유사도 비교 시 스케일 불일치 방지
         ohang_vector = [round(scores[o] / total, 10) for o in OHANG_ORDER]
 
-    # 표시용 정수 dict (반올림)
+    # UI 표시용: 소수점 점수를 반올림해 정수로 (예: "목 2개")
     ohang_dict = {o: round(scores[o]) for o in OHANG_ORDER}
 
     return ohang_dict, ohang_vector
@@ -215,9 +229,14 @@ def get_pillar_string(pillars: dict[str, dict[str, str] | None]) -> str:
 
 
 def get_daily_pillar(today: date | None = None) -> tuple[dict, dict[str, int], list[float]]:
-    """오늘의 연·월·일주(삼주) 및 오행 벡터 반환. today=None이면 date.today() 사용."""
+    """
+    오늘의 연·월·일주(삼주) 및 오행 벡터 반환.
+    오늘의 운세 탭에서 '오늘 기운'을 계산할 때 사용.
+    today=None이면 date.today() 사용.
+    """
     if today is None:
         today = date.today()
+    # 오늘의 기운은 연·월·일 3개 기둥만 사용 (시주 없음)
     pillars = get_saju_pillars(today.year, today.month, today.day, None)
     ohang_dict, ohang_vector = calc_ohang_vector(pillars)
     return pillars, ohang_dict, ohang_vector
@@ -226,7 +245,10 @@ def get_daily_pillar(today: date | None = None) -> tuple[dict, dict[str, int], l
 def combine_ohang_dicts(
     dict_a: dict[str, int], dict_b: dict[str, int]
 ) -> tuple[dict[str, int], list[float]]:
-    """두 오행 딕셔너리를 합산하여 새 dict와 정규화 벡터 반환."""
+    """
+    두 오행 딕셔너리를 합산하여 새 dict와 정규화 벡터 반환.
+    오늘의 운세 탭에서 '원국 + 오늘 기운' 합산 레이더 차트에 사용.
+    """
     combined = {o: dict_a.get(o, 0) + dict_b.get(o, 0) for o in OHANG_ORDER}
     total = sum(combined.values())
     vector = [round(combined[o] / total, 10) if total > 0 else 0.2 for o in OHANG_ORDER]

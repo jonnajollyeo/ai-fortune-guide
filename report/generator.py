@@ -34,6 +34,7 @@ def generate_report(
     """
     today = date.today().strftime("%Y-%m-%d")
     pillar_str = get_pillar_string(pillars)
+    # 시주 포함 여부로 삼주/팔자 모드 구분 — 리포트 헤더에 표시
     mode = "팔자(사주)" if pillars.get("시주") else "삼주(생시 미입력)"
 
     lines: list[str] = [
@@ -64,6 +65,7 @@ def generate_report(
         "|------|---------|------|",
     ]
 
+    # 한자 병기: 마크다운 파일을 단독으로 열어도 의미를 알 수 있도록
     ohang_cn = {"목": "木", "화": "火", "토": "土", "금": "金", "수": "水"}
     for o, v in zip(OHANG_ORDER, ohang_vector):
         count = ohang_dict.get(o, 0)

@@ -19,14 +19,15 @@ PERSONA_PROMPTS: dict[str, str] = {
     ),
 }
 
-# UI 표시용 레이블 ↔ 내부 키 매핑
+# app.py 라디오 버튼 표시용 레이블 → 내부 dict 키 변환
+# 공백이 있는 UI 레이블을 언더스코어 키로 매핑 (파이썬 dict 키 규칙 준수)
 PERSONA_LABELS: dict[str, str] = {
     "냉철한 선비": "냉철한_선비",
     "따뜻한 조언가": "따뜻한_조언가",
     "MZ 술사": "MZ_술사",
 }
 
-# 페르소나 설명 (UI 라디오 버튼 서브텍스트용)
+# 라디오 버튼 아래 서브텍스트: Streamlit captions 파라미터에 직접 전달
 PERSONA_DESCRIPTIONS: dict[str, str] = {
     "냉철한 선비": "고어체 · 논리 중심 · 원리 해설",
     "따뜻한 조언가": "경어체 · 공감 중심 · 격려",

@@ -26,7 +26,14 @@ _client: genai.Client | None = None
 
 
 def _resolve_api_key() -> str:
-    """런타임에 API 키를 읽는다. 로컬 .env → Streamlit st.secrets 순서로 폴백."""
+    """
+    런타임에 API 키를 읽는다. 로컬 .env → Streamlit st.secrets 순서로 폴백.
+
+    config.py의 GEMINI_API_KEY와 별도로 런타임에 다시 읽는 이유:
+    Streamlit Cloud에서는 앱 초기화 순서 때문에 config.py import 시점에
+    st.secrets가 아직 준비되지 않아 빈 문자열이 될 수 있음.
+    _get_client() 호출 시점(버튼 클릭 등)에는 st.secrets가 반드시 로드되어 있음.
+    """
     import os
     key = os.getenv("GEMINI_API_KEY", "")
     if key:
@@ -49,7 +56,10 @@ def _get_client() -> genai.Client:
 
 
 def _get_ilgan_info(pillars: dict) -> str:
-    """일주의 천간(일간)과 오행 반환. 예: '庚(금)'"""
+    """
+    일주의 천간(일간)과 오행 반환. 예: '庚(금)'
+    일간은 자아를 나타내므로 모든 AI 프롬프트에 명시해 해설 품질을 높임.
+    """
     from saju.calculator import OHANG_MAP
     ilju = pillars.get("일주")
     if not ilju:
@@ -83,6 +93,7 @@ def _build_user_message(
         )
 
     lines.append(f"상담 테마: {worry_theme}")
+    # 일간을 "본인의 핵심 기운"으로 명시해 AI가 개인화된 해설을 생성하도록 유도
     lines.append(
         f"일간 {ilgan}을 본인의 핵심 기운으로 삼아, "
         f"오행 에너지 특성과 {worry_theme}에 대한 조언을 해주세요."
@@ -92,7 +103,7 @@ def _build_user_message(
 
 
 def _classify_error(exc: Exception) -> str:
-    """예외 → 사용자 표시용 메시지 변환."""
+    """예외 → 사용자 표시용 메시지 변환. 기술적 오류를 친화적 문구로 치환."""
     if isinstance(exc, (UnicodeEncodeError, UnicodeDecodeError)):
         return "⚠️ API 키가 올바르지 않습니다. .env 파일에 실제 Gemini API 키를 입력하세요."
     err = str(exc).lower()
@@ -123,6 +134,10 @@ def get_saju_reading(
     """
     첫 번째 Gemini 사주 상담 요청.
 
+    chat 세션을 생성해 반환하는 이유:
+    이후 continue_chat()에서 같은 세션으로 추가 질문을 보낼 수 있어
+    대화 맥락이 유지됨 (SDK가 히스토리를 내부 관리).
+
     Args:
         persona_key  : PERSONA_PROMPTS의 키 ("냉철한_선비" 등)
         pillars      : get_saju_pillars() 반환값
@@ -145,7 +160,8 @@ def get_saju_reading(
                 system_instruction=system_prompt,
                 max_output_tokens=8192,   # thinking 토큰 소비 감안하여 충분히 확보
                 temperature=0.9,
-                thinking_config=types.ThinkingConfig(thinking_budget=512),  # thinking 최소화
+                # thinking_budget=512: 사주 해설은 창의적 글쓰기에 가까워 과도한 추론이 불필요
+                thinking_config=types.ThinkingConfig(thinking_budget=512),
             ),
         )
 
@@ -208,6 +224,7 @@ def _build_daily_message(
         f"오늘 날짜: {today}",
         f"오늘의 연·월·일주: {daily_str}",
         f"오늘의 오행: {daily_ohang_str}",
+        # 200자 내외로 제한: 운세는 간결할수록 가독성이 좋고 토큰도 절약됨
         f"일간 {ilgan}을 본인의 핵심 기운으로 삼아, 원국과 오늘 기운의 상호작용을 200자 내외로 간결하게 요약해줘.",
     ])
 
@@ -222,6 +239,7 @@ def _build_compat_message(
     """궁합 해설 요청 메시지 조립."""
     str_a = get_pillar_string(pillars_a)
     str_b = get_pillar_string(pillars_b)
+    # 비율(%)로 표시해 AI가 비중 차이를 직관적으로 파악할 수 있게 함
     ohang_a = " / ".join(f"{o} {round(v*100, 1)}%" for o, v in zip(OHANG_ORDER, vec_a))
     ohang_b = " / ".join(f"{o} {round(v*100, 1)}%" for o, v in zip(OHANG_ORDER, vec_b))
     ss = ", ".join(compat_data["sangseang"]) or "없음"
@@ -252,7 +270,10 @@ def get_daily_fortune(
     daily_pillars: dict,
     daily_ohang_dict: dict[str, int],
 ) -> str:
-    """오늘의 운세 일회성 Gemini 요청."""
+    """
+    오늘의 운세 일회성 Gemini 요청.
+    채팅 세션 없이 단일 요청으로 처리 — 대화 이어가기가 필요 없고 토큰을 아낄 수 있음.
+    """
     try:
         client = _get_client()
         system_prompt = PERSONA_PROMPTS.get(persona_key, PERSONA_PROMPTS["따뜻한_조언가"])
@@ -263,9 +284,9 @@ def get_daily_fortune(
             contents=user_msg,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                max_output_tokens=1024,
+                max_output_tokens=1024,  # 운세는 200자 내외이므로 1024로 충분
                 temperature=0.9,
-                thinking_config=types.ThinkingConfig(thinking_budget=256),
+                thinking_config=types.ThinkingConfig(thinking_budget=256),  # 짧은 출력, 최소 thinking
             ),
         )
         return response.text
@@ -282,7 +303,10 @@ def get_compatibility_reading(
     pillars_b: dict,
     compat_data: dict,
 ) -> str:
-    """궁합 해설 일회성 Gemini 요청."""
+    """
+    궁합 해설 일회성 Gemini 요청.
+    채팅 세션 없이 단일 요청으로 처리 — 궁합은 1회 해설로 완결되는 컨텐츠.
+    """
     try:
         client = _get_client()
         system_prompt = PERSONA_PROMPTS.get(persona_key, PERSONA_PROMPTS["따뜻한_조언가"])
@@ -293,7 +317,7 @@ def get_compatibility_reading(
             contents=user_msg,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
-                max_output_tokens=2048,
+                max_output_tokens=2048,  # 600자 요청이지만 한자·설명 포함 시 여유 필요
                 temperature=0.9,
                 thinking_config=types.ThinkingConfig(thinking_budget=512),
             ),
